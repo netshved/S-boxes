@@ -4,22 +4,11 @@ import json
 import ijson
 from collections import defaultdict
 import check as ch
+import operation as op
 
 filename_1 = "data/graphs.json"
 filename_2 = "data/labeled_graphs.json"
 filename_3 = "data/checked_graphs_id.txt"
-
-def logic_or(a, b):
-    return a | b
-
-def logic_and(a, b):
-    return a & b
-
-def logic_nand(a, b):
-    return ~(a & b) & 1  # Ограничиваем результат до 1 бита
-
-def logic_xor(a, b):
-    return a ^ b
 
 def process_large_graph_file(file_path, output_path, input_bits):
     """
@@ -47,10 +36,10 @@ def process_large_graph_file(file_path, output_path, input_bits):
 def build_sbox(graph):
     # Маппинг операций на функции
     operations = {
-        "or": logic_or,
-        "and": logic_and,
-        "nand": logic_nand,
-        "xor": logic_xor
+        "or": op.logic_or,
+        "and": op.logic_and,
+        "nand": op.logic_nand,
+        "xor": op.logic_xor
     }
 
     # Словарь меток узлов
