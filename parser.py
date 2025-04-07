@@ -2,7 +2,8 @@ import json
 
 # парсинг одного графа
 import ijson
-from collections import defaultdict
+
+from collections import defaultdict, deque
 import check as ch
 import operation as op
 
@@ -15,7 +16,7 @@ def process_large_graph_file(file_path, output_path, input_bits):
     Обрабатывает большой JSON-файл с графами по одному графу за раз и записывает результат в файл.
     """
     with open(file_path, "r", encoding="utf-8") as file, open(output_path, "w", encoding="utf-8") as output_file:
-        graphs = ijson.items(file, "item.item")  # Считываем вложенные графы
+        graphs = ijson.items(file, "item.item")
         for graph_json in graphs:
             try:
                 graph_id = graph_json.get("id", "unknown")
@@ -29,107 +30,104 @@ def process_large_graph_file(file_path, output_path, input_bits):
                 output_file.write(f"\nS-box ID: {graph_id}\n")
                 output_file.write("\n".join(str(item) for item in result))
 
-
             except Exception as e:
                  print(f"Ошибка при обработке графа: {e}")
 
 def build_sbox(graph):
-    # Маппинг операций на функции
     operations = {
-        "or": op.logic_or,
-        "and": op.logic_and,
-        "nand": op.logic_nand,
-        "xor": op.logic_xor
+        "or": lambda a, b: a | b,
+        "and": lambda a, b: a & b,
+        "nand": lambda a, b: 1 ^ (a & b),
+        "xor": lambda a, b: a ^ b
     }
 
-    # Словарь меток узлов
     labels = {node_id: data["label"] for node_id, data in graph["nodes"]}
-
-    # Строим зависимости
-    edges_to = defaultdict(list)  # Куда идут рёбра
-    edges_from = defaultdict(list)  # Откуда приходят рёбра
+    edges_to = defaultdict(list)
+    edges_from = defaultdict(list)
 
     for src, dest, _ in graph["edges"]:
         edges_to[dest].append(src)
         edges_from[src].append(dest)
 
-    # Ищем входные и выходные вершины
-    inputs = {node_id for node_id, label in labels.items()
-              if not edges_to[node_id] and label.startswith("x")}
-    outputs = {node_id for node_id, label in labels.items()
-               if not edges_from[node_id] and label.startswith("y")}
+    inputs = sorted(
+        [node_id for node_id, label in labels.items() if not edges_to[node_id] and label.startswith("x")],
+        key=lambda n: labels[n]
+    )
+    outputs = {node_id for node_id, label in labels.items() if not edges_from[node_id] and label.startswith("y")}
 
-    # Порядок вычислений
+    # Топологическая сортировка
+    in_degree = {node: len(edges_to[node]) for node in labels}
+    queue = deque([node for node in labels if in_degree[node] == 0])
     computation_order = []
-    computed = set(inputs)
-    to_compute = set(labels.keys()) - inputs
 
-    # Пошагово определяем порядок вычислений
-    while to_compute:
-        for node in list(to_compute):
-            if all(src in computed for src in edges_to[node]):
-                computation_order.append(node)
-                computed.add(node)
-                to_compute.remove(node)
+    while queue:
+        node = queue.popleft()
+        computation_order.append(node)
+        for neighbor in edges_from[node]:
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                queue.append(neighbor)
 
-    # Генерация последовательности операций
     intermediate_vars = {}
-    output_vars = {}
-    variable_count = len(inputs) + 1
+    variable_count = 4
     sequence = []
 
     for node in computation_order:
         if node in outputs:
-            output_vars[node] = edges_to[node][0]  # Связываем с источником
             continue
 
-        if node not in edges_to:
-            continue
-
-        operation = labels[node]
+        operation = labels.get(node, None)
         if operation not in operations:
-            raise ValueError(f"Неизвестная операция: {operation}")
+            continue
 
-        inputs_for_node = [intermediate_vars.get(src, labels[src]) for src in edges_to[node]]
+        parents = edges_to.get(node, [])
+        if len(parents) not in [1, 2]:
+            raise ValueError(f"Узел {node} имеет {len(parents)} входов (должно быть 1 или 2)")
 
-        # Создаем новое промежуточное значение
-        new_var = f"x{variable_count}"
+        input_vars = [intermediate_vars.get(parent, labels[parent]) for parent in parents]
+        output_var = f"x{variable_count}"
         variable_count += 1
-        intermediate_vars[node] = new_var
+        intermediate_vars[node] = output_var
 
-        # Формируем строку операции
-        op_str = f"{inputs_for_node[0]} {operation} {inputs_for_node[1]} = {new_var}"
-        sequence.append(op_str)
+        input_vars = []
+        for parent in parents:
+            if parent in intermediate_vars:
+                input_vars.append(intermediate_vars[parent])
+            else:
+                input_vars.append(labels[parent])
 
-    # Создаем финальные связи для выходов
-    for output in outputs:
-        source = edges_to[output][0]
-        output_var = intermediate_vars.get(source, labels[source])
-        sequence.append(f"{output_var} -> {labels[output]}")
+        output_var = f"tmp{variable_count}"
+        variable_count += 1
+        intermediate_vars[node] = output_var
 
-    # Создаем функцию для выполнения S-блока
+        if len(input_vars) == 1:
+            # Унарная
+            sequence.append(f"{input_vars[0]} {operation} = {output_var}")
+        else:
+            # Бинарная
+            sequence.append(f"{input_vars[0]} {operation} {input_vars[1]} = {output_var}")
+
+    # Связываем выходы
+    output_mapping = {}
+    for output_node in outputs:
+        source = edges_to[output_node][0]
+        output_mapping[output_node] = intermediate_vars.get(source, labels[source])
+
     def sbox_function(x):
-        """
-        Реализация S-блока. На вход подаётся список входных бит.
-        """
-        values = {f"x{i + 1}": bit for i, bit in enumerate(x)}
-
+        values = {labels[node]: bit for node, bit in zip(inputs, x)}
         for step in sequence:
             if "=" in step:
                 left, right = step.split("=")
                 left = left.strip()
                 right = right.strip()
-
-                parts = left.split()
-                a, op, b = parts[0], parts[1], parts[2]
-                values[right] = operations[op](values[a], values[b])
-
-            elif "->" in step:
-                left, right = step.split("->")
-                left = left.strip()
-                right = right.strip()
-                values[right] = values[left]
-
-        return [values[labels[output]] for output in outputs]
+                if " " in left:
+                    # Бинарная
+                    a, op, b = left.split()
+                    values[right] = operations[op](values[a], values[b])
+                else:
+                    # Унарная
+                    op, a = left.split()
+                    values[right] = operations[op](values[a])
+        return [values[output_mapping[o]] for o in sorted(outputs, key=lambda n: labels[n])]
 
     return sbox_function
