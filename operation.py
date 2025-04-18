@@ -10,3 +10,6 @@ def logic_nand(a, b):
 
 def logic_xor(a, b):
     return a ^ b
+
+def logic_nor(a, b):
+    return ~(a | b) & 1

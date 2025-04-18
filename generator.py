@@ -4,11 +4,45 @@ import json
 import networkx as nx
 from itertools import combinations
 
+from collections import deque
+
+
+def depends_on_all_inputs(graph, output_node, input_nodes):
+    """Проверяет, зависит ли output_node от всех input_nodes (0,1,2)."""
+    visited = set()
+    queue = deque([output_node])
+    dependencies = set()
+
+    while queue:
+        node = queue.popleft()
+        if node in visited:
+            continue
+        visited.add(node)
+        # Если текущий узел — входной бит, добавляем его в зависимости
+        if node in input_nodes:
+            dependencies.add(node)
+        # Идем по обратным ребрам к родителям (входным узлам)
+        for parent in graph.predecessors(node):
+            if parent not in visited:
+                queue.append(parent)
+
+    return dependencies == set(input_nodes)
+
+
+def is_valid_graph(graph):
+    """Проверяет, что все выходные узлы зависят от всех входных."""
+    input_nodes = [0, 1, 2]
+    output_nodes = [9, 10, 11]
+
+    for output in output_nodes:
+        if not depends_on_all_inputs(graph, output, input_nodes):
+            return False
+    return True
+
+
 def generate_graphs(from_nodes, to_nodes, G):
-    # Генерация комбинаций дуг
     combinations_to_node = list(combinations(from_nodes, 2))
-    all_graphs = set()  # Используем множество для автоматического исключения повторов
-     # Создание графов
+    all_graphs = set()  #  исключения повторов
     for combination_f in combinations_to_node:
         for to_node in to_nodes:
             H = G.copy()
@@ -28,8 +62,8 @@ def generate_graphs(from_nodes, to_nodes, G):
                                             H2 = H1.copy()
                                             H2.add_edge(combination_f3[0], to_node3)
                                             H2.add_edge(combination_f3[1], to_node3)
-                                            # Сохраняем уникальные графы по их множеству рёбер
-                                            all_graphs.add(frozenset(H2.edges))
+                                            if is_valid_graph(H2):
+                                                all_graphs.add(frozenset(H2.edges))
     return all_graphs
 
 
@@ -44,53 +78,43 @@ def generate_labeled_graphs(input_file, output_file, labels, chunk_size=1000):
     :param labels: Список доступных операций для маркировки вершин.
     :param chunk_size: Размер порции графов для записи в файл.
     """
-    # Загружаем исходные графы
+
     with open(input_file, 'r') as infile:
         all_graphs = json.load(infile)
 
-    # Определяем вершины для маркировки
     vertices_to_label = [3, 4, 5, 6, 7, 8]
 
-    # Генерируем все возможные комбинации меток
     label_combinations = list(itertools.product(labels, repeat=len(vertices_to_label)))
     total_combinations = len(label_combinations)
 
     print(f"Total graphs: {len(all_graphs)}")
     print(f"Total label combinations: {total_combinations}")
 
-    # Открываем файл для записи
     with open(output_file, 'w') as outfile:
-        outfile.write('[')  # Начало JSON массива
+        outfile.write('[')
+        graph_counter = 0
+        unique_id = 0
+        chunk = []
 
-        graph_counter = 0  # Счетчик обработанных графов
-        unique_id = 0  # Уникальный идентификатор графов
-        chunk = []  # Текущая порция графов
-
-        # Проходим по каждому графу
         for graph_index, (graph_id, graph_data) in enumerate(all_graphs.items()):
-            # Создаем граф
+
             graph = nx.DiGraph()
             graph.add_nodes_from(graph_data['nodes'])
             graph.add_edges_from(graph_data['edges'])
 
-            # Фиксированные метки для входных и выходных вершин
             fixed_labels = {
                 0: "x1", 1: "x2", 2: "x3",
                 9: "y1", 10: "y2", 11: "y3"
             }
 
-            # Применяем все комбинации меток
             for combination in label_combinations:
                 labeled_graph = graph.copy()
 
-                # Создаем отображение вершин на метки
                 mapping = {v: label for v, label in zip(vertices_to_label, combination)}
                 full_mapping = {**fixed_labels, **mapping}
 
-                # Обновляем метки вершин
                 nx.set_node_attributes(labeled_graph, full_mapping, 'label')
 
-                # Форматируем граф для сохранения
                 chunk.append({
                     'id': unique_id,
                     'nodes': list(labeled_graph.nodes(data=True)),
@@ -99,20 +123,17 @@ def generate_labeled_graphs(input_file, output_file, labels, chunk_size=1000):
 
                 unique_id += 1
 
-                # Записываем порцию в файл, если она достигла нужного размера
                 if len(chunk) >= chunk_size:
                     json.dump(chunk, outfile, separators=(',', ':'))
                     outfile.write(',')  # Разделяем порции запятой
                     chunk.clear()
 
-            # Логируем прогресс
             if graph_index % 10 == 0:
                 print(f"Processed {graph_index + 1}/{len(all_graphs)} graphs...")
 
-        # Записываем оставшиеся графы
         if chunk:
             json.dump(chunk, outfile, separators=(',', ':'))
 
-        outfile.write(']')  # Конец JSON массива
+        outfile.write(']')
 
     print(f"Total labeled graphs generated: {unique_id}")

@@ -8,9 +8,11 @@ import check as ch
 import operation as op
 
 filename_1 = "data/graphs.json"
+filename_1_new = "data/graphs_new.json"
 filename_2 = "data/labeled_graphs.json"
+filename_2_new = "data/labeled_graphs_new.json"
 filename_3 = "data/checked_graphs_id.txt"
-
+filename_3_new = "data/checked_graphs_id_new.txt"
 def process_large_graph_file(file_path, output_path, input_bits):
     """
     Обрабатывает большой JSON-файл с графами по одному графу за раз и записывает результат в файл.
@@ -23,12 +25,12 @@ def process_large_graph_file(file_path, output_path, input_bits):
                 sbox = build_sbox(graph_json)
                 try:
 
-                    ch.check(sbox, graph_id, filename_3)
+                    ch.check(graph_json, sbox, graph_id, filename_3_new)
                 except Exception as e:
                     print(f"Ошибка при проверке s-блока: {e}")
-                result = sbox(input_bits)
+                # result = sbox(input_bits)
                 output_file.write(f"\nS-box ID: {graph_id}\n")
-                output_file.write("\n".join(str(item) for item in result))
+                # output_file.write("\n".join(str(item) for item in result))
 
             except Exception as e:
                  print(f"Ошибка при обработке графа: {e}")
@@ -37,8 +39,9 @@ def build_sbox(graph):
     operations = {
         "or": lambda a, b: a | b,
         "and": lambda a, b: a & b,
-        "nand": lambda a, b: 1 ^ (a & b),
-        "xor": lambda a, b: a ^ b
+        "nand": lambda a, b: ~(a & b) & 1,
+        "xor": lambda a, b: a ^ b,
+        "nor": lambda a, b: ~(a | b) & 1
     }
 
     labels = {node_id: data["label"] for node_id, data in graph["nodes"]}
